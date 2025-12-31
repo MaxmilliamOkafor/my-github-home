@@ -63,6 +63,7 @@
       '[data-automation-id="createAccountLink"]',
       'a[href*="createAccount"]',
       'a[href*="create-account"]',
+      'button:has-text("Create Account")',
     ],
     // CREATE ACCOUNT PAGE SELECTORS
     createAccountEmail: [
@@ -473,7 +474,7 @@
     const pageText = document.body.textContent?.toLowerCase() || '';
     const hasVerifyPassword = document.querySelector('input[placeholder*="verify" i], input[name*="verify" i], input[id*="verify" i]');
     const hasConsentCheckbox = document.querySelector('input[type="checkbox"]');
-    const hasCreateAccountBtn = document.querySelector('button[aria-label*="Create Account" i]') ||
+    const hasCreateAccountBtn = document.querySelector('button[aria-label*="Create Account" i], button:has-text("Create Account")') ||
                                 Array.from(document.querySelectorAll('button')).some(b => b.textContent?.toLowerCase().includes('create account'));
     
     return (pageText.includes('create account') || pageText.includes('create an account')) &&
