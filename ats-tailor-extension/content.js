@@ -491,13 +491,44 @@
 
   function isOnCreateAccountPage() {
     const pageText = document.body.textContent?.toLowerCase() || '';
-    const hasVerifyPassword = document.querySelector('input[placeholder*="verify" i], input[name*="verify" i], input[id*="verify" i]');
-    const hasConsentCheckbox = document.querySelector('input[type="checkbox"]');
-    const hasCreateAccountBtn = document.querySelector('button[aria-label*="Create Account" i], button:has-text("Create Account")') ||
-                                Array.from(document.querySelectorAll('button')).some(b => b.textContent?.toLowerCase().includes('create account'));
-    
+
+    let hasVerifyPassword = false;
+    try {
+      hasVerifyPassword = !!document.querySelector(
+        'input[placeholder*="verify" i], input[name*="verify" i], input[id*="verify" i]'
+      );
+    } catch {}
+
+    let hasConsentCheckbox = false;
+    try {
+      hasConsentCheckbox = !!document.querySelector('input[type="checkbox"]');
+    } catch {}
+
+    // IMPORTANT: Never use Playwright-style selectors like :has-text() with querySelector.
+    // Some Workday pages trigger this check frequently; an invalid selector will stop automation.
+    let hasCreateAccountBtn = false;
+    try {
+      // Keep selectors strictly CSS-valid across Chrome versions (avoid attribute case flags like `[... i]`).
+      hasCreateAccountBtn = !!document.querySelector(
+        'button[data-automation-id="createAccountButton"],\n' +
+          'button[data-automation-id="createAccountSubmitButton"],\n' +
+          'button[aria-label*="Create Account"],\n' +
+          'input[type="submit"][value*="Create"]'
+      );
+    } catch {}
+
+    if (!hasCreateAccountBtn) {
+      hasCreateAccountBtn = Array.from(
+        document.querySelectorAll('button, input[type="submit"], a[role="button"]')
+      ).some((b) => {
+        const text = ((b.textContent || b.value || '') + '').trim().toLowerCase();
+        const aria = (b.getAttribute('aria-label') || '').trim().toLowerCase();
+        return text.includes('create account') || text.includes('create an account') || aria.includes('create account');
+      });
+    }
+
     return (pageText.includes('create account') || pageText.includes('create an account')) &&
-           (hasVerifyPassword || hasConsentCheckbox || hasCreateAccountBtn);
+      (hasVerifyPassword || hasConsentCheckbox || hasCreateAccountBtn);
   }
 
   // ============ WORKDAY FULL FLOW ============
