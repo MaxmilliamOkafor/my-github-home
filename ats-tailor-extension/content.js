@@ -168,6 +168,21 @@
     while (Date.now() - start < timeout) {
       for (const selector of selectors) {
         try {
+          // Skip invalid pseudo-selectors that aren't supported in CSS
+          if (selector.includes(':has-text(') || selector.includes(':has-text("')) {
+            // Handle :has-text as text matching fallback
+            const match = selector.match(/(.+?):has-text\(["']?(.+?)["']?\)/);
+            if (match) {
+              const [, baseSelector, text] = match;
+              const elements = document.querySelectorAll(baseSelector || '*');
+              for (const el of elements) {
+                if (el.textContent?.toLowerCase().includes(text.toLowerCase()) && el.offsetParent !== null) {
+                  return el;
+                }
+              }
+            }
+            continue;
+          }
           // Handle :contains pseudo-selector
           if (selector.includes(':contains(')) {
             const match = selector.match(/(.+?):contains\("(.+?)"\)/);
@@ -180,23 +195,27 @@
                 }
               }
             }
-          } else {
-            const elements = document.querySelectorAll(selector);
-            for (const el of elements) {
-              if (el && el.offsetParent !== null) {
-                // If textMatch is provided, check text content
-                if (textMatch) {
-                  const text = el.textContent?.trim().toLowerCase();
-                  if (text === textMatch.toLowerCase() || text?.includes(textMatch.toLowerCase())) {
-                    return el;
-                  }
-                } else {
+            continue;
+          }
+          
+          const elements = document.querySelectorAll(selector);
+          for (const el of elements) {
+            if (el && el.offsetParent !== null) {
+              // If textMatch is provided, check text content
+              if (textMatch) {
+                const text = el.textContent?.trim().toLowerCase();
+                if (text === textMatch.toLowerCase() || text?.includes(textMatch.toLowerCase())) {
                   return el;
                 }
+              } else {
+                return el;
               }
             }
           }
-        } catch (e) {}
+        } catch (e) {
+          // Invalid selector - log and skip
+          console.warn('[ATS Tailor] Skipping invalid selector:', selector);
+        }
       }
       await sleep(200);
     }
