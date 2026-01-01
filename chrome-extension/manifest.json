@@ -158,6 +158,9 @@
         "utils/selectorManager.js",
         "utils/encryptedStorage.js",
         "utils/universalATS.js",
+        "utils/locationTailor.js",
+        "utils/keywordMatcher.js",
+        "utils/cvGenerator.js",
         "content.js"
       ],
       "css": ["content.css"],
