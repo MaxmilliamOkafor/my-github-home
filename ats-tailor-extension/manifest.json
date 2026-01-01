@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ATS Tailored CV & Cover Letter",
-  "version": "2.0.0",
-  "description": "Enterprise ATS optimization with Simplify Keyword Matcher scoring, multi-page autofill, and bulk CSV job applications. Supports Greenhouse, Workday, SmartRecruiters, Bullhorn, Teamtailor, Workable, ICIMS, Oracle Cloud.",
+  "version": "2.1.0",
+  "description": "Enterprise ATS optimization with Simplify Keyword Matcher scoring, universal location tailoring, multi-page autofill, and bulk CSV job applications. Supports Greenhouse, Workday, SmartRecruiters, Bullhorn, Teamtailor, Workable, ICIMS, Oracle Cloud.",
   "permissions": [
     "storage",
     "activeTab",
@@ -21,7 +21,12 @@
     "https://*.icims.com/*",
     "https://*.oracle.com/*",
     "https://*.oraclecloud.com/*",
-    "https://*.taleo.net/*"
+    "https://*.taleo.net/*",
+    "https://*.lever.co/*",
+    "https://*.ashbyhq.com/*",
+    "https://*.indeed.com/*",
+    "https://*.linkedin.com/*",
+    "https://*.glassdoor.com/*"
   ],
   "action": {
     "default_popup": "popup.html",
@@ -45,9 +50,14 @@
         "https://*.icims.com/*",
         "https://*.oracle.com/*",
         "https://*.oraclecloud.com/*",
-        "https://*.taleo.net/*"
+        "https://*.taleo.net/*",
+        "https://*.lever.co/*",
+        "https://*.ashbyhq.com/*",
+        "https://*.indeed.com/*",
+        "https://*.linkedin.com/*",
+        "https://*.glassdoor.com/*"
       ],
-      "js": ["content.js"],
+      "js": ["utils/locationTailor.js", "utils/keywordMatcher.js", "utils/cvGenerator.js", "content.js"],
       "css": ["content.css"],
       "run_at": "document_end"
     }
