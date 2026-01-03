@@ -255,10 +255,17 @@
         continue;
       }
       
-      // Find keywords that need more mentions (below minMentions target)
-      const needsMore = highPriorityKeywords.filter(kw => {
+      // FIXED: Find ALL keywords with 0 mentions first (must-add), then those below minMentions
+      const lineLower = line.toLowerCase();
+      const mustAdd = highPriorityKeywords.filter(kw => {
         const current = stats[kw].mentions;
-        const inLine = line.toLowerCase().includes(kw.toLowerCase());
+        const inLine = lineLower.includes(kw.toLowerCase());
+        return current === 0 && !inLine; // Keywords with ZERO mentions are must-add
+      });
+      
+      const needsMore = mustAdd.length > 0 ? mustAdd : highPriorityKeywords.filter(kw => {
+        const current = stats[kw].mentions;
+        const inLine = lineLower.includes(kw.toLowerCase());
         return current < minMentions && !inLine;
       });
       
@@ -309,9 +316,22 @@
 
     // USE UNIQUE CV ENGINE if available (preserves companies/roles/dates, modifies bullets only)
     if (global.UniqueCVEngine?.generateUniqueCVForJob) {
-      const uniqueResult = global.UniqueCVEngine.generateUniqueCVForJob(cvText, keywords.highPriority || keywords.all.slice(0, 15));
+      // FIXED: Pass ALL keywords (deduplicated) - not just highPriority
+      const allKeywords = [...new Set([
+        ...(keywords.highPriority || []),
+        ...(keywords.mediumPriority || []),
+        ...(keywords.lowPriority || []),
+        ...(keywords.workExperience || []),
+        ...(keywords.all || [])
+      ])];
+      
+      console.log(`[TurboPipeline] Passing ${allKeywords.length} total keywords to UniqueCVEngine`);
+      
+      const uniqueResult = global.UniqueCVEngine.generateUniqueCVForJob(cvText, allKeywords);
       const timing = performance.now() - startTime;
       console.log(`[TurboPipeline] Unique CV generated in ${timing.toFixed(0)}ms (target: ${TIMING_TARGETS.TAILOR_CV}ms)`);
+      console.log(`[TurboPipeline] Keywords coverage: ${uniqueResult.stats.keywordsCoverage}%, Missing: ${uniqueResult.stats.missingKeywords?.length || 0}`);
+      
       return {
         tailoredCV: uniqueResult.uniqueCV,
         originalCV: cvText,
