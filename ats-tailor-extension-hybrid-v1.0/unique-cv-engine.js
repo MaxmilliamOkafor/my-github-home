@@ -135,36 +135,47 @@
   }
 
   // ============ GENERATE UNIQUE BULLET (JOB-TAILORED) ============
-  function generateUniqueBullet(originalBullet, jobKeywords, usedKeywords, templateIndex) {
-    if (!originalBullet || !jobKeywords?.length) return originalBullet.text || originalBullet;
+  function generateUniqueBullet(originalBullet, jobKeywords, usedKeywords, templateIndex, bulletAllocation = 3) {
+    if (!originalBullet || !jobKeywords?.length) return { enhanced: originalBullet.text || originalBullet, injected: [] };
 
     const bulletText = originalBullet.text || originalBullet;
     const metrics = originalBullet.metrics || extractMetrics(bulletText);
     const bulletLower = bulletText.toLowerCase();
 
-    // Find keywords NOT already in this bullet
+    // Find keywords NOT already in this bullet (allow reuse across bullets for coverage)
     const availableKeywords = jobKeywords.filter(kw => 
-      !bulletLower.includes(kw.toLowerCase()) && !usedKeywords.has(kw.toLowerCase())
+      !bulletLower.includes(kw.toLowerCase())
     );
 
-    if (availableKeywords.length === 0) return bulletText;
+    if (availableKeywords.length === 0) return { enhanced: bulletText, injected: [] };
 
-    // Select 1-2 keywords to inject
-    const keywordsToInject = availableKeywords.slice(0, CONFIG.MAX_KEYWORDS_PER_BULLET);
+    // INCREASED: Inject up to bulletAllocation keywords per bullet (default 3)
+    const keywordsToInject = availableKeywords.slice(0, bulletAllocation);
     const phrase = INJECTION_PHRASES[Math.floor(Math.random() * INJECTION_PHRASES.length)];
+    const injectedList = [];
 
     // Track used keywords
-    keywordsToInject.forEach(kw => usedKeywords.add(kw.toLowerCase()));
+    keywordsToInject.forEach(kw => {
+      usedKeywords.add(kw.toLowerCase());
+      injectedList.push(kw);
+    });
 
     // PRESERVE original achievement and metrics, just prepend/inject keyword
     let enhanced = bulletText;
+    
+    // Format injection naturally based on keyword count
+    const keywordStr = keywordsToInject.length === 1 
+      ? keywordsToInject[0]
+      : keywordsToInject.length === 2
+        ? `${keywordsToInject[0]} and ${keywordsToInject[1]}`
+        : `${keywordsToInject.slice(0, -1).join(', ')}, and ${keywordsToInject.slice(-1)}`;
     
     // Strategy 1: Inject after first clause
     const firstClauseEnd = bulletText.search(/,|and\s|while\s|by\s/i);
     if (firstClauseEnd > 15 && firstClauseEnd < bulletText.length / 2) {
       const before = bulletText.slice(0, firstClauseEnd);
       const after = bulletText.slice(firstClauseEnd);
-      enhanced = `${before} ${phrase} ${keywordsToInject.join(' and ')}${after}`;
+      enhanced = `${before} ${phrase} ${keywordStr}${after}`;
     } else {
       // Strategy 2: Append before final metric/period
       const lastMetricPos = bulletText.lastIndexOf('%');
@@ -174,13 +185,13 @@
       if (insertPos > 20) {
         const before = bulletText.slice(0, insertPos);
         const after = bulletText.slice(insertPos);
-        enhanced = `${before.trimEnd()}, ${phrase} ${keywordsToInject.join(' and ')}${after}`;
+        enhanced = `${before.trimEnd()}, ${phrase} ${keywordStr}${after}`;
       } else {
-        enhanced = `${bulletText.replace(/\.?\s*$/, '')} ${phrase} ${keywordsToInject.join(' and ')}.`;
+        enhanced = `${bulletText.replace(/\.?\s*$/, '')} ${phrase} ${keywordStr}.`;
       }
     }
 
-    return enhanced;
+    return { enhanced, injected: injectedList };
   }
 
   // ============ GENERATE UNIQUE CV FOR JOB ============
@@ -193,14 +204,24 @@
 
     const parsed = parseUserCV(cvText);
     const usedKeywords = new Set();
+    const allInjectedKeywords = [];
     const stats = { 
       rolesProcessed: 0, 
       bulletsModified: 0, 
       keywordsInjected: 0,
+      keywordsProvided: jobKeywords.length,
+      keywordsCoverage: 0,
       preservedCompanies: [],
       preservedTitles: [],
-      preservedMetrics: []
+      preservedMetrics: [],
+      missingKeywords: []
     };
+
+    // Count total bullets across all roles for even distribution
+    const totalBullets = parsed.rawRoles.reduce((sum, role) => sum + role.originalBullets.length, 0);
+    const keywordsPerBullet = Math.max(2, Math.ceil(jobKeywords.length / Math.max(1, totalBullets)));
+    
+    console.log(`[UniqueCVEngine] Distributing ${jobKeywords.length} keywords across ${totalBullets} bullets (${keywordsPerBullet} per bullet)`);
 
     // Process each role - PRESERVE company, title, dates; MODIFY bullets only
     const modifiedRoles = parsed.rawRoles.map((role, roleIdx) => {
@@ -208,23 +229,23 @@
       stats.preservedCompanies.push(role.company);
       stats.preservedTitles.push(role.title);
 
-      // Role weight: more recent roles get more keywords
-      const roleWeight = Math.max(1, 4 - roleIdx); // 4, 3, 2, 1 for first 4 roles
-      const keywordsForRole = jobKeywords.slice(0, 5 * roleWeight);
+      // ALL keywords available for each role (no slicing) - let the bullet function handle deduplication
+      const keywordsForRole = jobKeywords;
 
       const modifiedBullets = role.originalBullets.map((bullet, bulletIdx) => {
         // Preserve metrics in stats
         bullet.metrics.forEach(m => stats.preservedMetrics.push(m));
 
-        // Only modify if we haven't hit our keyword distribution target
-        if (usedKeywords.size >= jobKeywords.length * 0.8) return bullet.text;
-
-        const enhanced = generateUniqueBullet(bullet, keywordsForRole, usedKeywords, bulletIdx);
-        if (enhanced !== bullet.text) {
+        // REMOVED: Early termination check - we want ALL keywords injected
+        const result = generateUniqueBullet(bullet, keywordsForRole, usedKeywords, bulletIdx, keywordsPerBullet);
+        
+        if (result.injected.length > 0) {
           stats.bulletsModified++;
-          stats.keywordsInjected += Math.min(2, keywordsForRole.length);
+          stats.keywordsInjected += result.injected.length;
+          allInjectedKeywords.push(...result.injected);
         }
-        return enhanced;
+        
+        return result.enhanced;
       });
 
       return {
@@ -233,11 +254,20 @@
       };
     });
 
+    // Calculate coverage and find missing keywords
+    const injectedSet = new Set(allInjectedKeywords.map(k => k.toLowerCase()));
+    stats.missingKeywords = jobKeywords.filter(kw => !injectedSet.has(kw.toLowerCase()));
+    stats.keywordsCoverage = Math.round(((jobKeywords.length - stats.missingKeywords.length) / jobKeywords.length) * 100);
+
     // Reconstruct CV with preserved structure + modified bullets
     const uniqueCV = reconstructCVWithModifiedBullets(parsed, modifiedRoles);
 
     const timing = performance.now() - startTime;
-    console.log(`[UniqueCVEngine] Generated unique CV in ${timing.toFixed(0)}ms:`, stats);
+    console.log(`[UniqueCVEngine] Generated unique CV in ${timing.toFixed(0)}ms:`, {
+      ...stats,
+      coveragePercent: `${stats.keywordsCoverage}%`,
+      missing: stats.missingKeywords.slice(0, 10).join(', ')
+    });
 
     return {
       uniqueCV,
