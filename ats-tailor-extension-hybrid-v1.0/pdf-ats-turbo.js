@@ -11,9 +11,9 @@
       // Font: Arial 10.5pt (ATS Universal - recruiter scannable)
       font: 'helvetica', // jsPDF uses helvetica as Arial equivalent
       fontSize: {
-        name: 14,
-        sectionTitle: 11,
-        body: 10.5,  // CRITICAL: 10.5pt as specified
+        name: 24,         // UPDATED: 24pt+ for prominent name (matches good-format CV)
+        sectionTitle: 14, // UPDATED: 14pt for section headers (matches good-format CV)
+        body: 10.5,       // CRITICAL: 10.5pt as specified
         small: 9
       },
       // Margins: 0.75 inches all sides (54pt) - ATS standard
@@ -25,6 +25,8 @@
       },
       // Line spacing: 1.15 - ATS optimal
       lineHeight: 1.15,
+      // Bullet indent: 0.5cm = ~14pt (matches good-format CV)
+      bulletIndent: 14,
       // A4 dimensions in points
       pageWidth: 595.28,
       pageHeight: 841.89,
@@ -139,6 +141,11 @@
       let location = candidateData?.city || candidateData?.location || '';
       if (typeof window !== 'undefined' && window.ATSLocationTailor) {
         location = window.ATSLocationTailor.normalizeLocationForCV(location);
+      }
+      
+      // Location >4 words rule: replace with standard format (matches good-format CV)
+      if (location && location.split(/\s+/).length > 4) {
+        location = 'Lucan, County Dublin, IE';
       }
 
       // Build contact parts - only include non-empty values
@@ -517,12 +524,14 @@
         addSectionHeader('PROFESSIONAL SUMMARY');
         doc.setFont(font, 'normal');
         addText(sections.summary, false, false, fontSize.body);
+        yPos += fontSize.body * 0.5; // 1.5x line spacing after summary (matches good-format CV)
       }
 
       // === WORK EXPERIENCE ===
       if (sections.experience) {
         addSectionHeader('WORK EXPERIENCE');
         const expLines = sections.experience.split('\n');
+        const bulletIndent = this.CONFIG.bulletIndent || 14; // 0.5cm indent
         
         expLines.forEach(line => {
           const trimmed = line.trim();
@@ -531,15 +540,48 @@
             return;
           }
           
-          // Bullet points - ALWAYS normal weight
+          // Bullet points - 0.5cm indent, normal weight (matches good-format CV)
           if (trimmed.startsWith('-') || trimmed.startsWith('•') || trimmed.startsWith('*')) {
             doc.setFont(font, 'normal');
-            addText(trimmed, false, false, fontSize.body);
+            doc.setFontSize(fontSize.body);
+            const bulletText = trimmed.replace(/^[-•*]\s*/, '• ');
+            const lines = doc.splitTextToSize(bulletText, contentWidth - bulletIndent);
+            lines.forEach(bLine => {
+              if (yPos > pageHeight - margins.bottom - 30) {
+                doc.addPage();
+                yPos = margins.top;
+              }
+              doc.text(bLine, margins.left + bulletIndent, yPos);
+              yPos += fontSize.body * lineHeight + 2;
+            });
           }
-          // Company/Role line - BOLD
+          // Company | Dates line - Bold company, right-align dates (matches good-format CV)
           else if (trimmed.includes('|') && !trimmed.match(/^\d{4}/)) {
-            doc.setFont(font, 'bold');
-            addText(trimmed, true, false, fontSize.body);
+            const parts = trimmed.split('|').map(p => p.trim());
+            if (parts.length >= 2) {
+              const company = parts[0];
+              const dates = parts[parts.length - 1];
+              
+              doc.setFont(font, 'bold');
+              doc.setFontSize(fontSize.body);
+              doc.text(company, margins.left, yPos);
+              
+              // Right-align dates (matches good-format CV)
+              const dateWidth = doc.getTextWidth(dates);
+              doc.text(dates, pageWidth - margins.right - dateWidth, yPos);
+              yPos += fontSize.body * lineHeight + 2;
+              
+              // Job title on next line if exists (middle parts)
+              if (parts.length > 2) {
+                const jobTitle = parts.slice(1, -1).join(' | ');
+                doc.setFont(font, 'bold');
+                doc.text(jobTitle, margins.left, yPos);
+                yPos += fontSize.body * lineHeight + 2;
+              }
+            } else {
+              doc.setFont(font, 'bold');
+              addText(trimmed, true, false, fontSize.body);
+            }
           }
           // Date/Location lines - NORMAL, slightly smaller
           else if (trimmed.match(/\d{4}/) || trimmed.match(/^[A-Z][a-z]+,?\s+/)) {
@@ -569,19 +611,84 @@
         });
       }
 
-      // === SKILLS (Comma-separated, proper case) ===
+      // === SKILLS (Bold categories, comma-separated) (matches good-format CV) ===
       if (sections.skills) {
         addSectionHeader('SKILLS');
-        doc.setFont(font, 'normal');
-        // Skills as a flowing paragraph, wrapped properly
-        addText(sections.skills, false, false, fontSize.body);
+        // Check if skills have categories like "Technical: skill1, skill2"
+        const skillsText = sections.skills;
+        if (skillsText.includes(':')) {
+          // Parse categories and render with bold labels
+          const categories = skillsText.split(/(?=\w+:)/g).filter(c => c.trim());
+          categories.forEach(cat => {
+            const colonIdx = cat.indexOf(':');
+            if (colonIdx > 0) {
+              const label = cat.substring(0, colonIdx + 1).trim();
+              const skills = cat.substring(colonIdx + 1).trim();
+              
+              // Bold category label (matches good-format CV)
+              doc.setFont(font, 'bold');
+              doc.setFontSize(fontSize.body);
+              doc.text(label + ' ', margins.left, yPos);
+              const labelWidth = doc.getTextWidth(label + ' ');
+              
+              // Normal skills text
+              doc.setFont(font, 'normal');
+              const skillLines = doc.splitTextToSize(skills, contentWidth - labelWidth);
+              if (skillLines.length > 0) {
+                doc.text(skillLines[0], margins.left + labelWidth, yPos);
+                yPos += fontSize.body * lineHeight + 2;
+                for (let i = 1; i < skillLines.length; i++) {
+                  if (yPos > pageHeight - margins.bottom - 30) {
+                    doc.addPage();
+                    yPos = margins.top;
+                  }
+                  doc.text(skillLines[i], margins.left, yPos);
+                  yPos += fontSize.body * lineHeight + 2;
+                }
+              }
+            } else {
+              doc.setFont(font, 'normal');
+              addText(cat.trim(), false, false, fontSize.body);
+            }
+          });
+        } else {
+          // No categories - render as flowing paragraph
+          doc.setFont(font, 'normal');
+          addText(skillsText, false, false, fontSize.body);
+        }
       }
 
-      // === CERTIFICATIONS (Comma-separated) ===
+      // === CERTIFICATIONS (Bold names, normal issuing bodies) (matches good-format CV) ===
       if (sections.certifications) {
         addSectionHeader('CERTIFICATIONS');
-        doc.setFont(font, 'normal');
-        addText(sections.certifications, false, false, fontSize.body);
+        const certs = sections.certifications.split(',').map(c => c.trim()).filter(c => c);
+        
+        certs.forEach(cert => {
+          // Check for pattern: "Cert Name - Issuing Body" or "Cert Name (Issuing Body)"
+          const dashMatch = cert.match(/^(.+?)\s*[-–]\s*(.+)$/);
+          const parenMatch = cert.match(/^(.+?)\s*\((.+)\)$/);
+          
+          if (dashMatch || parenMatch) {
+            const match = dashMatch || parenMatch;
+            const certName = match[1].trim();
+            const issuer = match[2].trim();
+            
+            // Bold certification name (matches good-format CV)
+            doc.setFont(font, 'bold');
+            doc.setFontSize(fontSize.body);
+            doc.text(certName, margins.left, yPos);
+            const nameWidth = doc.getTextWidth(certName + ' - ');
+            
+            // Normal issuing body
+            doc.setFont(font, 'normal');
+            doc.text(' - ' + issuer, margins.left + doc.getTextWidth(certName), yPos);
+            yPos += fontSize.body * lineHeight + 2;
+          } else {
+            // No issuer pattern - just bold the cert name
+            doc.setFont(font, 'bold');
+            addText(cert, true, false, fontSize.body);
+          }
+        });
       }
 
       // Generate output
