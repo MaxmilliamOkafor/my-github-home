@@ -48,9 +48,10 @@
   }
 
   // ============ TURBO KEYWORD EXTRACTION (≤50ms, instant if cached) ============
+  // ============ TOP 1% KEYWORD EXTRACTION - Extract EVERYTHING from JD ============
   async function turboExtractKeywords(jobDescription, options = {}) {
     const startTime = performance.now();
-    const { jobUrl = '', maxKeywords = 35 } = options;
+    const { jobUrl = '', maxKeywords = 50 } = options; // Increased to 50 for TOP 1%
     
     if (!jobDescription || jobDescription.length < 50) {
       return { all: [], highPriority: [], mediumPriority: [], lowPriority: [], workExperience: [], total: 0, timing: 0 };
@@ -62,14 +63,14 @@
       return { ...cached, timing: performance.now() - startTime, fromCache: true };
     }
 
-    // Ultra-fast synchronous extraction
+    // Ultra-fast synchronous extraction - GET EVERYTHING
     const result = ultraFastExtraction(jobDescription, maxKeywords);
 
     // Cache result
     setCachedKeywords(jobUrl, jobDescription, result);
 
     const timing = performance.now() - startTime;
-    console.log(`[TurboPipeline] Keywords extracted in ${timing.toFixed(0)}ms (target: ${TIMING_TARGETS.EXTRACT_KEYWORDS}ms)`);
+    console.log(`[TurboPipeline] TOP 1% Keywords extracted: ${result.total} in ${timing.toFixed(0)}ms`);
     
     return { ...result, timing, fromCache: false };
   }
@@ -150,33 +151,37 @@
       }
     });
 
-    // Sort and split into priority buckets
+    // Sort and split into priority buckets - TOP 1% gets ALL keywords
     const sorted = [...freq.entries()]
       .filter(([word]) => !softSkillsToExclude.has(word))
       .sort((a, b) => b[1] - a[1])
       .map(([word]) => word)
       .slice(0, maxKeywords);
 
-    const highCount = Math.min(15, Math.ceil(sorted.length * 0.45));
-    const medCount = Math.min(10, Math.ceil(sorted.length * 0.35));
+    // TOP 1% STRATEGY: More aggressive splits for maximum keyword coverage
+    const highCount = Math.min(20, Math.ceil(sorted.length * 0.40)); // Top 40% = high priority
+    const medCount = Math.min(15, Math.ceil(sorted.length * 0.35));  // Next 35% = medium
+    const lowCount = sorted.length - highCount - medCount;           // Remaining = low
+
+    console.log(`[TurboPipeline] TOP 1% Split: H:${highCount} M:${medCount} L:${lowCount} Total:${sorted.length}`);
 
     return {
       all: sorted,
       highPriority: sorted.slice(0, highCount),
       mediumPriority: sorted.slice(highCount, highCount + medCount),
       lowPriority: sorted.slice(highCount + medCount),
-      workExperience: sorted.slice(0, 15), // Top 15 for WE injection
+      workExperience: sorted.slice(0, 25), // Top 25 for WE injection (increased)
       total: sorted.length
     };
   }
 
-  // ============ ALL KEYWORDS DISTRIBUTION (3-5x mentions for HIGH/MEDIUM, 1-2x for LOW) ============
-  // CRITICAL FIX: Distribute ALL keywords naturally across Work Experience bullets
-  // High Priority: 3-5 mentions, Medium Priority: 3-5 mentions, Low Priority: 1-2 mentions
-  // Distribution strategy: More recent roles get more keywords
+  // ============ TOP 1% ALL KEYWORDS DISTRIBUTION ============
+  // GUARANTEED: ALL keywords are injected naturally for TOP 1% ATS ranking
+  // High Priority: 3-5 mentions, Medium Priority: 2-4 mentions, Low Priority: 1-2 mentions
+  // Distribution: Every keyword appears at least once, high priority keywords repeated
   function distributeAllKeywords(cvText, keywords, options = {}) {
     const startTime = performance.now();
-    const { maxBulletsPerRole = 8, highMinMentions = 3, highMaxMentions = 5, medMinMentions = 3, medMaxMentions = 5, lowMinMentions = 1, lowMaxMentions = 2 } = options;
+    const { maxBulletsPerRole = 10, highMinMentions = 3, highMaxMentions = 5, medMinMentions = 2, medMaxMentions = 4, lowMinMentions = 1, lowMaxMentions = 2 } = options;
     
     const highPriorityKeywords = keywords.highPriority || [];
     const mediumPriorityKeywords = keywords.mediumPriority || [];
