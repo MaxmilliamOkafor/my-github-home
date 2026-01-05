@@ -684,7 +684,6 @@
     
     return Math.round((matched / keywords.length) * 100);
   }
-  }
 
   // ============ AUTO-TAILOR DOCUMENTS ============
   async function autoTailorDocuments() {
