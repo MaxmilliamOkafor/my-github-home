@@ -57,48 +57,21 @@
       return true;
     }
     
-    // ============ INSTANT 50ms TAILOR + ATTACH (Single-Step Pipeline) ============
+    // ============ FRESH JD TAILOR + ATTACH (Per-Role, No Fallback) ============
+    // ALWAYS extracts keywords from THIS job's JD and tailors CV fresh - NO generic cache reuse
     if (message.action === 'INSTANT_TAILOR_ATTACH') {
       const start = performance.now();
       const jobUrl = message.jobUrl || window.location.href;
       
-      console.log('[ATS Tailor] ⚡ INSTANT_TAILOR_ATTACH received');
+      console.log('[ATS Tailor] ⚡ FRESH JD TAILOR - extracting keywords for THIS role');
       createStatusBanner();
-      updateBanner('🚀 Tailoring...', 'working');
+      updateBanner('🚀 Extracting JD keywords...', 'working');
       
-      // Check for cached PDFs first (instant ~25ms)
-      chrome.storage.local.get(['tailoredPDFs', 'cvPDF', 'coverPDF', 'cvFileName', 'coverFileName'], async (data) => {
+      chrome.storage.local.get(['ats_session', 'ats_profile', 'ats_baseCV'], async (data) => {
         try {
-          const cachedPDFs = data.tailoredPDFs?.[jobUrl];
-          
-          if (cachedPDFs?.cvBase64 && cachedPDFs?.coverBase64) {
-            // CACHE HIT - Instant attach (~25ms)
-            console.log('[ATS Tailor] ⚡ CACHE HIT - instant attach');
-            cvFile = createPDFFile(cachedPDFs.cvBase64, cachedPDFs.cvFileName || 'Resume.pdf');
-            coverFile = createPDFFile(cachedPDFs.coverBase64, cachedPDFs.coverFileName || 'Cover_Letter.pdf');
-            filesLoaded = true;
-            
-            forceEverything();
-            ultraFastReplace();
-            
-            const elapsed = Math.round(performance.now() - start);
-            updateBanner(`✅ Attached in ${elapsed}ms (cached)`, 'success');
-            sendResponse({ status: 'attached', timing: elapsed, cached: true });
-            return;
-          }
-          
-          // CACHE MISS - Run turbo pipeline (~50ms)
-          console.log('[ATS Tailor] ⚡ CACHE MISS - running turbo pipeline');
-          
-          // Get session + profile in parallel
-          const [sessionData, profileData] = await Promise.all([
-            new Promise(r => chrome.storage.local.get(['ats_session'], r)),
-            new Promise(r => chrome.storage.local.get(['ats_profile', 'ats_baseCV'], r))
-          ]);
-          
-          const session = sessionData.ats_session;
-          const baseCV = profileData.ats_baseCV || '';
-          const profile = profileData.ats_profile || {};
+          const session = data.ats_session;
+          const baseCV = data.ats_baseCV || '';
+          const profile = data.ats_profile || {};
           
           if (!session?.access_token) {
             updateBanner('Please login first', 'error');
@@ -106,64 +79,84 @@
             return;
           }
           
-          // Extract job info from page
+          // ALWAYS extract fresh job info from THIS page's JD
           const jobInfo = extractJobInfo();
-          updateBanner(`🚀 Tailoring: ${jobInfo.title?.substring(0, 30)}...`, 'working');
+          const jobTitle = jobInfo.title || 'Role';
+          updateBanner(`🔍 Parsing: ${jobTitle.substring(0, 25)}...`, 'working');
           
-          // Run TurboPipeline if available (local, ~50ms)
-          if (typeof TurboPipeline !== 'undefined' && TurboPipeline.executeTurboPipeline) {
-            const pipelineResult = await TurboPipeline.executeTurboPipeline(
-              jobInfo,
-              profile,
-              baseCV,
-              { maxKeywords: 35 }
-            );
-            
-            if (pipelineResult.success && pipelineResult.cvPDF && pipelineResult.coverPDF) {
-              // Cache the result
-              const pdfCache = data.tailoredPDFs || {};
-              pdfCache[jobUrl] = {
-                cvBase64: pipelineResult.cvPDF.base64,
-                coverBase64: pipelineResult.coverPDF.base64,
-                cvFileName: pipelineResult.cvPDF.filename,
-                coverFileName: pipelineResult.coverPDF.filename,
-                timestamp: Date.now()
-              };
-              chrome.storage.local.set({ tailoredPDFs: pdfCache });
-              
-              // Create files and attach
-              cvFile = createPDFFile(pipelineResult.cvPDF.base64, pipelineResult.cvPDF.filename);
-              coverFile = createPDFFile(pipelineResult.coverPDF.base64, pipelineResult.coverPDF.filename);
-              filesLoaded = true;
-              
-              forceEverything();
-              ultraFastReplace();
-              
-              const elapsed = Math.round(performance.now() - start);
-              updateBanner(`✅ Attached in ${elapsed}ms`, 'success');
-              sendResponse({ status: 'attached', timing: elapsed, cached: false });
-              return;
+          // Extract keywords from JD (local, ~10ms)
+          let keywords = [];
+          if (typeof TurboPipeline !== 'undefined' && TurboPipeline.turboExtractKeywords) {
+            keywords = await TurboPipeline.turboExtractKeywords(jobInfo.description || '', { jobUrl, maxKeywords: 15 });
+          } else if (jobInfo.description) {
+            // Fallback: basic keyword extraction from JD
+            keywords = extractBasicKeywords(jobInfo.description);
+          }
+          
+          console.log(`[ATS Tailor] Extracted ${keywords.length} role-specific keywords:`, keywords.slice(0, 8));
+          updateBanner(`📝 Tailoring CV with ${keywords.length} keywords...`, 'working');
+          
+          // Tailor CV with extracted keywords (~20ms)
+          let tailoredCV = baseCV;
+          if (typeof TurboPipeline !== 'undefined' && TurboPipeline.turboTailorCV) {
+            tailoredCV = await TurboPipeline.turboTailorCV(baseCV, keywords, jobInfo);
+          } else if (typeof TailorUniversal !== 'undefined' && TailorUniversal.tailorCV) {
+            tailoredCV = await TailorUniversal.tailorCV(baseCV, keywords, { jobTitle, company: jobInfo.company });
+          }
+          
+          // Calculate match score
+          let matchScore = 0;
+          if (typeof ReliableExtractor !== 'undefined' && ReliableExtractor.matchKeywords) {
+            const matchResult = ReliableExtractor.matchKeywords(tailoredCV, keywords);
+            matchScore = matchResult.matchScore || Math.round((matchResult.matched / keywords.length) * 100);
+          } else {
+            matchScore = calculateBasicMatch(tailoredCV, keywords);
+          }
+          
+          updateBanner(`📄 Generating PDF (Match: ${matchScore}%)...`, 'working');
+          
+          // Generate PDF (~15ms)
+          let pdfResult = null;
+          if (typeof OpenResumeGenerator !== 'undefined' && OpenResumeGenerator.generateATSPackage) {
+            pdfResult = await OpenResumeGenerator.generateATSPackage(tailoredCV, keywords, jobInfo);
+          } else if (typeof TurboPipeline !== 'undefined' && TurboPipeline.executeTurboPipeline) {
+            const pipelineResult = await TurboPipeline.executeTurboPipeline(jobInfo, profile, baseCV, { maxKeywords: 15 });
+            if (pipelineResult.success) {
+              pdfResult = { cv: pipelineResult.cvPDF, cover: pipelineResult.coverPDF };
             }
           }
           
-          // Fallback: Use existing stored PDFs
-          if (data.cvPDF && data.coverPDF) {
-            cvFile = createPDFFile(data.cvPDF, data.cvFileName || 'Resume.pdf');
-            coverFile = createPDFFile(data.coverPDF, data.coverFileName || 'Cover_Letter.pdf');
+          if (pdfResult?.cv) {
+            // Store per-job (jobUrl keyed) - never reuse across different jobs
+            chrome.storage.local.set({
+              [`tailored_${jobUrl}`]: {
+                keywords,
+                matchScore,
+                cvBase64: pdfResult.cv.base64 || pdfResult.cv,
+                cvFileName: pdfResult.cv.filename || `${profile.firstName || 'Resume'}_${profile.lastName || ''}_CV.pdf`,
+                coverBase64: pdfResult.cover?.base64 || pdfResult.cover,
+                coverFileName: pdfResult.cover?.filename || 'Cover_Letter.pdf',
+                timestamp: Date.now()
+              }
+            });
+            
+            // Create files and attach
+            cvFile = createPDFFile(pdfResult.cv.base64 || pdfResult.cv, pdfResult.cv.filename || 'Resume.pdf');
+            coverFile = pdfResult.cover ? createPDFFile(pdfResult.cover.base64 || pdfResult.cover, pdfResult.cover.filename || 'Cover_Letter.pdf') : null;
             filesLoaded = true;
             
             forceEverything();
             ultraFastReplace();
             
             const elapsed = Math.round(performance.now() - start);
-            updateBanner(`✅ Attached in ${elapsed}ms (fallback)`, 'success');
-            sendResponse({ status: 'attached', timing: elapsed, cached: false });
+            updateBanner(`✅ Match: ${matchScore}% | Attached in ${elapsed}ms`, 'success');
+            sendResponse({ status: 'attached', timing: elapsed, matchScore, keywords: keywords.length });
             return;
           }
           
-          // No PDFs available - trigger full tailoring
-          updateBanner('Generating PDFs...', 'working');
-          sendResponse({ status: 'pending', message: 'Running full tailor' });
+          // Last resort: trigger full API tailoring (only if local pipeline unavailable)
+          updateBanner('🔄 Running full tailor...', 'working');
+          sendResponse({ status: 'pending', message: 'Running full tailor via API' });
           autoTailorDocuments();
           
         } catch (error) {
@@ -637,6 +630,60 @@
     const description = rawDesc?.trim()?.length > 80 ? rawDesc.trim().substring(0, 3000) : '';
 
     return { title, company, location, description, url: window.location.href, platform: platformKey || hostname };
+  }
+
+  // ============ BASIC KEYWORD EXTRACTION (Fallback if TurboPipeline unavailable) ============
+  function extractBasicKeywords(jobDescription) {
+    if (!jobDescription) return [];
+    
+    // Common technical & skill keywords to look for
+    const skillPatterns = [
+      /\b(python|javascript|typescript|java|c\+\+|ruby|go|rust|php|swift|kotlin)\b/gi,
+      /\b(react|angular|vue|node\.?js|express|django|flask|spring|rails)\b/gi,
+      /\b(aws|azure|gcp|docker|kubernetes|terraform|jenkins|ci\/cd)\b/gi,
+      /\b(sql|postgresql|mysql|mongodb|redis|elasticsearch)\b/gi,
+      /\b(machine learning|deep learning|nlp|computer vision|data science)\b/gi,
+      /\b(agile|scrum|kanban|jira|confluence)\b/gi,
+      /\b(git|github|gitlab|bitbucket)\b/gi,
+      /\b(rest|graphql|api|microservices|serverless)\b/gi,
+      /\b(testing|junit|pytest|jest|selenium|cypress)\b/gi,
+      /\b(leadership|management|communication|collaboration|problem.solving)\b/gi,
+    ];
+    
+    const foundKeywords = new Set();
+    const text = jobDescription.toLowerCase();
+    
+    for (const pattern of skillPatterns) {
+      const matches = text.match(pattern) || [];
+      matches.forEach(m => foundKeywords.add(m.toLowerCase().trim()));
+    }
+    
+    // Also extract capitalized phrases (likely important terms)
+    const capitalizedTerms = jobDescription.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\b/g) || [];
+    capitalizedTerms.slice(0, 10).forEach(term => {
+      if (term.length > 3 && term.length < 30) {
+        foundKeywords.add(term.toLowerCase());
+      }
+    });
+    
+    return Array.from(foundKeywords).slice(0, 15);
+  }
+
+  // ============ BASIC MATCH CALCULATION (Fallback if ReliableExtractor unavailable) ============
+  function calculateBasicMatch(cvText, keywords) {
+    if (!cvText || !keywords?.length) return 0;
+    
+    const cvLower = cvText.toLowerCase();
+    let matched = 0;
+    
+    for (const keyword of keywords) {
+      if (cvLower.includes(keyword.toLowerCase())) {
+        matched++;
+      }
+    }
+    
+    return Math.round((matched / keywords.length) * 100);
+  }
   }
 
   // ============ AUTO-TAILOR DOCUMENTS ============
