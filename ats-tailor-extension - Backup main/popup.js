@@ -310,7 +310,7 @@ class ATSTailor {
   
   /**
    * Trigger Extract & Apply Keywords button with visible pressed/loading state
-   * Called via runtime messaging from content.js automation
+   * ULTRA-FAST 50ms SINGLE-STEP: Uses INSTANT_TAILOR_ATTACH for cache-first speed
    */
   async triggerExtractApplyWithUI(jobInfo, showAnimation = true) {
     const btn = document.getElementById('tailorBtn');
@@ -318,6 +318,8 @@ class ATSTailor {
       console.warn('[ATS Tailor Popup] tailorBtn not found');
       return;
     }
+    
+    const startTime = performance.now();
     
     // Show pressed/loading state with VISIBLE animation
     if (showAnimation) {
@@ -343,7 +345,7 @@ class ATSTailor {
     const originalIcon = btnIcon?.textContent || '🚀';
     
     if (btnText) {
-      btnText.textContent = '⚡ Processing...';
+      btnText.textContent = '⚡ 50ms Processing...';
     }
     if (btnIcon) {
       btnIcon.textContent = '⏳';
@@ -357,33 +359,63 @@ class ATSTailor {
     }
     
     try {
-      // Run the same tailorDocuments handler
-      await this.tailorDocuments({ force: true });
+      // ============ ULTRA-FAST: Send INSTANT_TAILOR_ATTACH to content.js ============
+      // This uses cached PDFs for ~25ms or runs turbo pipeline for ~50ms
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       
-      // Success animation
-      if (showAnimation) {
-        btn.style.background = 'linear-gradient(135deg, #00c853, #69f0ae)';
-        btn.style.transform = 'scale(1.02)';
-        btn.style.boxShadow = '0 4px 20px rgba(0, 200, 83, 0.4)';
-        if (btnIcon) btnIcon.textContent = '✅';
-        if (btnText) btnText.textContent = 'Complete!';
+      if (tab?.id) {
+        const response = await chrome.tabs.sendMessage(tab.id, {
+          action: 'INSTANT_TAILOR_ATTACH',
+          jobUrl: tab.url || window.location.href,
+          showTimer: true
+        });
         
-        setTimeout(() => {
-          btn.style.background = '';
-          btn.style.transform = '';
-          btn.style.boxShadow = '';
-        }, 2000);
+        const elapsed = Math.round(performance.now() - startTime);
+        
+        if (response?.status === 'attached') {
+          console.log(`[ATS Tailor Popup] ⚡ INSTANT attach complete in ${response.timing}ms (cached: ${response.cached})`);
+          
+          // Success animation
+          if (showAnimation) {
+            btn.style.background = 'linear-gradient(135deg, #00c853, #69f0ae)';
+            btn.style.transform = 'scale(1.02)';
+            btn.style.boxShadow = '0 4px 20px rgba(0, 200, 83, 0.4)';
+            if (btnIcon) btnIcon.textContent = '✅';
+            if (btnText) btnText.textContent = `✅ ${response.timing}ms${response.cached ? ' (cached)' : ''}`;
+          }
+          
+          this.showToast(`Attached in ${response.timing}ms!`, 'success');
+        } else if (response?.status === 'pending') {
+          // Full tailor running in background
+          if (btnText) btnText.textContent = '⚡ Generating...';
+          // Fall through to legacy tailorDocuments
+          await this.tailorDocuments({ force: true });
+        } else {
+          throw new Error(response?.error || 'Unknown error');
+        }
+      } else {
+        // No active tab - fall back to legacy flow
+        await this.tailorDocuments({ force: true });
       }
       
       // Notify background that extraction is complete
       chrome.runtime.sendMessage({ action: 'EXTRACT_APPLY_COMPLETE' }).catch(() => {});
       
     } catch (error) {
+      console.error('[ATS Tailor Popup] Error:', error);
+      
       // Error animation
       if (showAnimation) {
         btn.style.background = 'linear-gradient(135deg, #ff1744, #ff5252)';
         if (btnIcon) btnIcon.textContent = '❌';
         if (btnText) btnText.textContent = 'Error!';
+      }
+      
+      // Fallback to legacy flow
+      try {
+        await this.tailorDocuments({ force: true });
+      } catch (e) {
+        this.showToast(`Error: ${e.message}`, 'error');
       }
     } finally {
       // Remove pressed/loading state after completion
@@ -400,6 +432,23 @@ class ATSTailor {
           btnIcon.style.animation = '';
         }
       }, showAnimation ? 2500 : 0);
+    }
+  }
+  
+  /**
+   * Trigger LazyApply 28s sync - schedules CV override after LazyApply attaches their CV
+   */
+  async triggerLazyApplySync() {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab?.id) {
+        const response = await chrome.tabs.sendMessage(tab.id, {
+          action: 'LAZYAPPLY_28S_SYNC'
+        });
+        this.showToast(`LazyApply override scheduled in ${response.delay / 1000}s`, 'success');
+      }
+    } catch (e) {
+      this.showToast('Could not schedule LazyApply sync', 'error');
     }
   }
 

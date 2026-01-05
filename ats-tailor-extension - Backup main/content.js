@@ -48,12 +48,162 @@
     }
   });
   
-  // Listen for default location updates from popup
+  // Listen for messages from popup
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'UPDATE_DEFAULT_LOCATION' && message.defaultLocation) {
       defaultLocation = message.defaultLocation;
       console.log('[ATS Tailor] Updated default location to:', defaultLocation);
       sendResponse({ status: 'updated' });
+      return true;
+    }
+    
+    // ============ INSTANT 50ms TAILOR + ATTACH (Single-Step Pipeline) ============
+    if (message.action === 'INSTANT_TAILOR_ATTACH') {
+      const start = performance.now();
+      const jobUrl = message.jobUrl || window.location.href;
+      
+      console.log('[ATS Tailor] ⚡ INSTANT_TAILOR_ATTACH received');
+      createStatusBanner();
+      updateBanner('🚀 Tailoring...', 'working');
+      
+      // Check for cached PDFs first (instant ~25ms)
+      chrome.storage.local.get(['tailoredPDFs', 'cvPDF', 'coverPDF', 'cvFileName', 'coverFileName'], async (data) => {
+        try {
+          const cachedPDFs = data.tailoredPDFs?.[jobUrl];
+          
+          if (cachedPDFs?.cvBase64 && cachedPDFs?.coverBase64) {
+            // CACHE HIT - Instant attach (~25ms)
+            console.log('[ATS Tailor] ⚡ CACHE HIT - instant attach');
+            cvFile = createPDFFile(cachedPDFs.cvBase64, cachedPDFs.cvFileName || 'Resume.pdf');
+            coverFile = createPDFFile(cachedPDFs.coverBase64, cachedPDFs.coverFileName || 'Cover_Letter.pdf');
+            filesLoaded = true;
+            
+            forceEverything();
+            ultraFastReplace();
+            
+            const elapsed = Math.round(performance.now() - start);
+            updateBanner(`✅ Attached in ${elapsed}ms (cached)`, 'success');
+            sendResponse({ status: 'attached', timing: elapsed, cached: true });
+            return;
+          }
+          
+          // CACHE MISS - Run turbo pipeline (~50ms)
+          console.log('[ATS Tailor] ⚡ CACHE MISS - running turbo pipeline');
+          
+          // Get session + profile in parallel
+          const [sessionData, profileData] = await Promise.all([
+            new Promise(r => chrome.storage.local.get(['ats_session'], r)),
+            new Promise(r => chrome.storage.local.get(['ats_profile', 'ats_baseCV'], r))
+          ]);
+          
+          const session = sessionData.ats_session;
+          const baseCV = profileData.ats_baseCV || '';
+          const profile = profileData.ats_profile || {};
+          
+          if (!session?.access_token) {
+            updateBanner('Please login first', 'error');
+            sendResponse({ status: 'error', error: 'No session' });
+            return;
+          }
+          
+          // Extract job info from page
+          const jobInfo = extractJobInfo();
+          updateBanner(`🚀 Tailoring: ${jobInfo.title?.substring(0, 30)}...`, 'working');
+          
+          // Run TurboPipeline if available (local, ~50ms)
+          if (typeof TurboPipeline !== 'undefined' && TurboPipeline.executeTurboPipeline) {
+            const pipelineResult = await TurboPipeline.executeTurboPipeline(
+              jobInfo,
+              profile,
+              baseCV,
+              { maxKeywords: 35 }
+            );
+            
+            if (pipelineResult.success && pipelineResult.cvPDF && pipelineResult.coverPDF) {
+              // Cache the result
+              const pdfCache = data.tailoredPDFs || {};
+              pdfCache[jobUrl] = {
+                cvBase64: pipelineResult.cvPDF.base64,
+                coverBase64: pipelineResult.coverPDF.base64,
+                cvFileName: pipelineResult.cvPDF.filename,
+                coverFileName: pipelineResult.coverPDF.filename,
+                timestamp: Date.now()
+              };
+              chrome.storage.local.set({ tailoredPDFs: pdfCache });
+              
+              // Create files and attach
+              cvFile = createPDFFile(pipelineResult.cvPDF.base64, pipelineResult.cvPDF.filename);
+              coverFile = createPDFFile(pipelineResult.coverPDF.base64, pipelineResult.coverPDF.filename);
+              filesLoaded = true;
+              
+              forceEverything();
+              ultraFastReplace();
+              
+              const elapsed = Math.round(performance.now() - start);
+              updateBanner(`✅ Attached in ${elapsed}ms`, 'success');
+              sendResponse({ status: 'attached', timing: elapsed, cached: false });
+              return;
+            }
+          }
+          
+          // Fallback: Use existing stored PDFs
+          if (data.cvPDF && data.coverPDF) {
+            cvFile = createPDFFile(data.cvPDF, data.cvFileName || 'Resume.pdf');
+            coverFile = createPDFFile(data.coverPDF, data.coverFileName || 'Cover_Letter.pdf');
+            filesLoaded = true;
+            
+            forceEverything();
+            ultraFastReplace();
+            
+            const elapsed = Math.round(performance.now() - start);
+            updateBanner(`✅ Attached in ${elapsed}ms (fallback)`, 'success');
+            sendResponse({ status: 'attached', timing: elapsed, cached: false });
+            return;
+          }
+          
+          // No PDFs available - trigger full tailoring
+          updateBanner('Generating PDFs...', 'working');
+          sendResponse({ status: 'pending', message: 'Running full tailor' });
+          autoTailorDocuments();
+          
+        } catch (error) {
+          console.error('[ATS Tailor] INSTANT_TAILOR_ATTACH error:', error);
+          updateBanner(`Error: ${error.message}`, 'error');
+          sendResponse({ status: 'error', error: error.message });
+        }
+      });
+      
+      return true; // Keep channel open for async response
+    }
+    
+    // ============ LAZYAPPLY 28s SYNC - Post-CV Override ============
+    if (message.action === 'LAZYAPPLY_28S_SYNC') {
+      console.log('[ATS Tailor] ⚡ LAZYAPPLY 28s sync triggered');
+      
+      // Wait 28 seconds for LazyApply to attach their CV, then override
+      setTimeout(async () => {
+        const start = performance.now();
+        createStatusBanner();
+        updateBanner('🔄 LazyApply override...', 'working');
+        
+        // Kill any existing file attachments
+        killXButtons();
+        await new Promise(r => setTimeout(r, 100));
+        
+        // Force our files
+        forceEverything();
+        ultraFastReplace();
+        
+        const elapsed = Math.round(performance.now() - start);
+        updateBanner(`✅ Override complete in ${elapsed}ms`, 'success');
+        
+        chrome.runtime.sendMessage({ 
+          action: 'LAZYAPPLY_OVERRIDE_COMPLETE', 
+          timing: elapsed 
+        }).catch(() => {});
+      }, 28000);
+      
+      sendResponse({ status: 'scheduled', delay: 28000 });
       return true;
     }
   });
